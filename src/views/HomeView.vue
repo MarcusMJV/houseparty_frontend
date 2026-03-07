@@ -1,4 +1,31 @@
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import { ref } from 'vue'
+
+const roomCreated = ref(false)
+const roomCode = ref('')
+const username = ref('')
+const loading = ref(false)
+
+async function createRoom() {
+  loading.value = true
+  try {
+    const res = await fetch('http://localhost:8080/create', { method: 'POST' })
+    if (!res.ok) throw new Error(`Server returned ${res.status}`)
+    const data = await res.json()
+    roomCode.value = data.room_code
+    roomCreated.value = true
+  } catch (err) {
+    console.error('Failed to create room:', err)
+  } finally {
+    loading.value = false
+  }
+}
+
+function submitUsername() {
+  // TODO: handle username submission
+  console.log('Username:', username.value, 'Room:', roomCode.value)
+}
+</script>
 
 <template>
   <div class="page">
@@ -48,15 +75,36 @@
         <p class="tagline">Queue music together with friends</p>
       </div>
 
-      <!-- Buttons -->
-      <div class="flex flex-col gap-3 w-full">
-        <router-link to="/create" class="btn-primary slide-up" style="animation-delay: 140ms;">
-          Create Room
-        </router-link>
+      <!-- Buttons (pre-create) -->
+      <div v-if="!roomCreated" class="flex flex-col gap-3 w-full">
+        <button
+          class="btn-primary slide-up"
+          style="animation-delay: 140ms;"
+          :disabled="loading"
+          @click="createRoom"
+        >
+          {{ loading ? 'Creating…' : 'Create Room' }}
+        </button>
         <router-link to="/join" class="btn-secondary slide-up" style="animation-delay: 260ms;">
           Join Room
         </router-link>
       </div>
+
+      <!-- Username form (post-create) -->
+      <form v-else class="flex flex-col gap-3 w-full slide-up" @submit.prevent="submitUsername">
+        <p class="room-code-label">Room code: <span class="accent">{{ roomCode }}</span></p>
+        <input
+          v-model="username"
+          type="text"
+          placeholder="Your name"
+          class="input-field"
+          required
+          autofocus
+        />
+        <button type="submit" class="btn-primary">
+          Enter Room
+        </button>
+      </form>
     </div>
   </div>
 </template>
@@ -197,4 +245,36 @@
   transition: color 0.2s ease;
 }
 .github-link:hover { color: #fff; }
+
+/* ── Input ────────────────────────────────────────── */
+.input-field {
+  width: 100%;
+  padding: 0.9rem 1rem;
+  border-radius: 0.875rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #e5e7eb;
+  font-size: 0.975rem;
+  outline: none;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.input-field::placeholder { color: #6b7280; }
+.input-field:focus {
+  border-color: #1DB954;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* ── Room code label ──────────────────────────────── */
+.room-code-label {
+  font-size: 0.875rem;
+  color: #9ca3af;
+  text-align: center;
+}
+
+/* ── Disabled button ──────────────────────────────── */
+.btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
 </style>
