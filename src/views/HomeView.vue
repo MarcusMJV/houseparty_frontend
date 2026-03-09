@@ -1,29 +1,57 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 
-const roomCreated = ref(false)
+const router = useRouter()
+
+const step = ref<'home' | 'spotify' | 'join' | 'username'>('home')
 const roomCode = ref('')
+const spotifyPassword = ref('')
 const username = ref('')
 const loading = ref(false)
+const toastMessage = ref('')
+const toastVisible = ref(false)
+let toastTimer: ReturnType<typeof setTimeout> | null = null
 
-async function createRoom() {
+function showToast(message: string) {
+  if (toastTimer) clearTimeout(toastTimer)
+  toastMessage.value = message
+  toastVisible.value = true
+  toastTimer = setTimeout(() => { toastVisible.value = false }, 4000)
+}
+
+async function submitSpotify() {
   loading.value = true
   try {
-    const res = await fetch('http://localhost:8080/create', { method: 'POST' })
-    if (!res.ok) throw new Error(`Server returned ${res.status}`)
+    const res = await fetch('http://localhost:8080/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: spotifyPassword.value }),
+    })
     const data = await res.json()
+    if (!res.ok) {
+      const msg = data?.error ?? data?.message ?? `Server returned ${res.status}`
+      console.error('Failed to create room:', msg)
+      showToast(msg)
+      return
+    }
     roomCode.value = data.room_code
-    roomCreated.value = true
+    step.value = 'username'
   } catch (err) {
-    console.error('Failed to create room:', err)
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('Failed to create room:', msg)
+    showToast('Could not reach the server. Please try again.')
   } finally {
     loading.value = false
   }
 }
 
+function submitJoinCode() {
+  step.value = 'username'
+}
+
 function submitUsername() {
-  // TODO: handle username submission
-  console.log('Username:', username.value, 'Room:', roomCode.value)
+  router.push({ path: `/room/${roomCode.value}`, state: { name: username.value } })
 }
 </script>
 
@@ -31,6 +59,13 @@ function submitUsername() {
   <div class="page">
     <!-- Soft glow behind card -->
     <div class="glow" aria-hidden="true"></div>
+
+    <!-- Toast -->
+    <transition name="toast">
+      <div v-if="toastVisible" class="toast" role="alert">
+        {{ toastMessage }}
+      </div>
+    </transition>
 
     <!-- GitHub link -->
     <a
@@ -72,25 +107,58 @@ function submitUsername() {
             <rect class="bar bar-5" x="24" y="9"  width="3" height="6"  rx="1.5"/>
           </svg>
         </div>
-        <p class="tagline">Queue music together with friends</p>
+        <p v-if="step === 'home'" class="tagline">Queue music together with friends</p>
       </div>
 
-      <!-- Buttons (pre-create) -->
-      <div v-if="!roomCreated" class="flex flex-col gap-3 w-full">
+      <!-- Home: two main buttons -->
+      <div v-if="step === 'home'" class="flex flex-col gap-3 w-full">
         <button
           class="btn-primary slide-up"
           style="animation-delay: 140ms;"
-          :disabled="loading"
-          @click="createRoom"
+          @click="step = 'spotify'"
         >
-          {{ loading ? 'Creating…' : 'Create Room' }}
+          Create Room
         </button>
-        <router-link to="/join" class="btn-secondary slide-up" style="animation-delay: 260ms;">
+        <button
+          class="btn-secondary slide-up"
+          style="animation-delay: 260ms;"
+          @click="step = 'join'"
+        >
           Join Room
-        </router-link>
+        </button>
       </div>
 
-      <!-- Username form (post-create) -->
+      <!-- Spotify password form -->
+      <form v-else-if="step === 'spotify'" class="flex flex-col gap-3 w-full slide-up" @submit.prevent="submitSpotify">
+        <p class="room-code-label">Enter your demo Spotify password</p>
+        <input
+          v-model="spotifyPassword"
+          type="password"
+          placeholder="Spotify password"
+          class="input-field"
+          required
+          autofocus
+        />
+        <button type="submit" class="btn-primary" :disabled="loading">
+          {{ loading ? 'Creating…' : 'Submit' }}
+        </button>
+      </form>
+
+      <!-- Join: room code form -->
+      <form v-else-if="step === 'join'" class="flex flex-col gap-3 w-full slide-up" @submit.prevent="submitJoinCode">
+        <p class="room-code-label">Enter the room code</p>
+        <input
+          v-model="roomCode"
+          type="text"
+          placeholder="Room code"
+          class="input-field"
+          required
+          autofocus
+        />
+        <button type="submit" class="btn-primary">Next</button>
+      </form>
+
+      <!-- Username form (post-create / post-join) -->
       <form v-else class="flex flex-col gap-3 w-full slide-up" @submit.prevent="submitUsername">
         <p class="room-code-label">Room code: <span class="accent">{{ roomCode }}</span></p>
         <input
@@ -208,6 +276,7 @@ function submitUsername() {
   font-size: 0.975rem;
   font-weight: 600;
   letter-spacing: 0.01em;
+  cursor: pointer;
   transition:
     transform 0.18s ease,
     box-shadow 0.22s ease,
@@ -220,13 +289,15 @@ function submitUsername() {
 .btn-secondary:active { transform: scale(0.97); }
 
 .btn-primary {
-  background-color: #1DB954;
-  color: #fff;
-  box-shadow: 0 4px 20px rgba(29, 185, 84, 0.3);
+  background-color: #111613;
+  color: #1DB954;
+  border: 2px solid rgba(29, 185, 84, 0.35);
+  box-shadow: 0 4px 20px rgba(29, 185, 84, 0.12);
 }
 .btn-primary:hover {
-  background-color: #1ed760;
-  box-shadow: 0 6px 32px rgba(29, 185, 84, 0.55);
+  background-color: #161d17;
+  border-color: rgba(29, 185, 84, 0.85);
+  box-shadow: 0 6px 28px rgba(29, 185, 84, 0.28);
 }
 
 .btn-secondary {
@@ -270,6 +341,25 @@ function submitUsername() {
   color: #9ca3af;
   text-align: center;
 }
+
+/* ── Toast ────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  padding: 0.75rem 1.25rem;
+  border-radius: 0.75rem;
+  background: #1a0c0c;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.toast-enter-active, .toast-leave-active { transition: opacity 0.3s ease, transform 0.3s ease; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(8px); }
 
 /* ── Disabled button ──────────────────────────────── */
 .btn-primary:disabled {
