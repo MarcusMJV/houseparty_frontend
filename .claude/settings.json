@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkcert --version)",
+      "Read(//c/Users/Marcus Vorster/scoop/shims/**)",
+      "Read(//c/Users/Marcus Vorster/scoop/apps/**)",
+      "Bash(/c/tools/mkcert.exe --version)",
+      "Bash(/c/tools/mkcert.exe -install)",
+      "Bash(mkdir -p \"c:/Users/Marcus Vorster/Documents/Coding/HouseParty_2/Frontend/certs\")",
+      "Bash(/c/tools/mkcert.exe localhost:*)"
+    ]
+  }
+}
