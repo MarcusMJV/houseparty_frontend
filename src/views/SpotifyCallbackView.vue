@@ -111,7 +111,7 @@ onMounted(async () => {
   align-items: center;
   gap: 2.75rem;
   width: 100%;
-  max-width: 22rem;
+  max-width: 30rem;
   padding: 3.25rem 2.75rem;
   border-radius: 2rem;
   background: rgba(255, 255, 255, 0.03);
