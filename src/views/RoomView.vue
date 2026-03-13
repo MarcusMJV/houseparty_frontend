@@ -47,11 +47,13 @@ const toastVisible = ref(false)
 const currentSong = ref<Song | null>(null)
 const remainingMs = ref(0)
 const playlist = ref<Song[]>([])
+const usersOpen = ref(false)
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 let countdownInterval: ReturnType<typeof setInterval> | null = null
 let spotifyPlayer: SpotifyPlayerInstance | null = null
 let deviceId = ''
+let currentToken = ''
 
 function showToast(message: string) {
   if (toastTimer) clearTimeout(toastTimer)
@@ -77,11 +79,6 @@ function selectSong(song: Song) {
   searchOpen.value = false
 }
 
-function closeSearch() {
-  songs.value = []
-  searchQuery.value = ''
-  searchOpen.value = false
-}
 
 function formatDuration(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000)
@@ -98,6 +95,7 @@ function startCountdown(durationMs: number) {
     if (remainingMs.value <= 0) {
       clearInterval(countdownInterval!)
       countdownInterval = null
+      sendEvent('song-ended', {})
     }
   }, 1000)
 }
@@ -115,39 +113,35 @@ function loadSpotifySDK(): Promise<void> {
   })
 }
 
-async function playSong(song: Song, token: string) {
+async function playSong(song: Song) {
   currentSong.value = song
   startCountdown(song.duration_ms)
 
   await loadSpotifySDK()
 
-  if (spotifyPlayer) {
-    spotifyPlayer.disconnect()
-    spotifyPlayer = null
-    deviceId = ''
+  if (!spotifyPlayer) {
+    spotifyPlayer = new window.Spotify.Player({
+      name: 'HouseParty',
+      getOAuthToken: (cb) => cb(currentToken),
+      volume: 0.8,
+      robustness: 'SW_SECURE_CRYPTO',
+    })
+
+    const deviceReady = new Promise<string>((resolve) => {
+      spotifyPlayer!.addListener('ready', (data) => {
+        deviceId = data.device_id as string
+        resolve(deviceId)
+      })
+    })
+
+    await spotifyPlayer.connect()
+    await deviceReady
   }
 
-  spotifyPlayer = new window.Spotify.Player({
-    name: 'HouseParty',
-    getOAuthToken: (cb) => cb(token),
-    volume: 0.8,
-    robustness: 'SW_SECURE_CRYPTO',
-  })
-
-  const deviceReady = new Promise<string>((resolve) => {
-    spotifyPlayer!.addListener('ready', (data) => {
-      deviceId = data.device_id as string
-      resolve(deviceId)
-    })
-  })
-
-  await spotifyPlayer.connect()
-  const id = await deviceReady
-
-  await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${id}`, {
+  await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
     method: 'PUT',
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${currentToken}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ uris: [song.uri] }),
@@ -177,7 +171,15 @@ function handleEvent(raw: string) {
 
   if (event.type === 'set_song') {
     const payload = event.payload as { song: Song; token: string }
-    playSong(payload.song, payload.token)
+    currentToken = payload.token
+    playSong(payload.song)
+  }
+
+  if (event.type === 'play_next') {
+    const payload = event.payload as { token: string }
+    currentToken = payload.token
+    const next = playlist.value.shift()
+    if (next) playSong(next)
   }
 
   if (event.type === 'update_playlist') {
@@ -267,8 +269,12 @@ onUnmounted(() => {
       </div>
 
       <!-- Now playing -->
-      <transition name="now-playing">
-        <div v-if="currentSong" class="now-playing">
+      <transition name="now-playing" mode="out-in">
+        <div v-if="!currentSong" key="empty" class="no-song">
+          <p class="no-song-text">No song playing</p>
+          <p class="no-song-sub">Search and choose a song to get the party started</p>
+        </div>
+        <div v-else key="playing" class="now-playing">
           <p class="now-playing-label">Now Playing</p>
           <div class="song-row now-playing-row">
             <img :src="currentSong.image.url" :alt="currentSong.name" class="song-img song-img--lg" />
@@ -296,18 +302,49 @@ onUnmounted(() => {
         </ul>
       </div>
 
-      <!-- Search button -->
-      <button class="btn-search" @click="searchOpen = true" aria-label="Search songs">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8"/>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-      </button>
+      <!-- Bottom controls -->
+      <div class="controls-row">
+        <button class="btn-control" @click="usersOpen = true" aria-label="View users">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+        </button>
+
+        <button class="btn-search" @click="searchOpen = true" aria-label="Search songs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </button>
+
+        <button class="btn-control" @click="sendEvent('skip-song', {})" aria-label="Skip song">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="5 4 15 12 5 20 5 4"/>
+            <line x1="19" y1="5" x2="19" y2="19"/>
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- Backdrop -->
     <transition name="backdrop">
-      <div v-if="searchOpen" class="backdrop" @click="closeSearch" />
+      <div v-if="searchOpen || usersOpen" class="backdrop" @click="searchOpen = false; usersOpen = false" />
+    </transition>
+
+    <!-- Users card -->
+    <transition name="search-card">
+      <div v-if="usersOpen" class="search-card">
+        <p class="search-title">Connected Users</p>
+        <ul class="results-list">
+          <li v-for="user in users" :key="user" class="user-row">
+            <div class="user-avatar">{{ user.charAt(0).toUpperCase() }}</div>
+            <span class="song-name">{{ user }}</span>
+          </li>
+        </ul>
+      </div>
     </transition>
 
     <!-- Search card -->
@@ -456,6 +493,36 @@ onUnmounted(() => {
 .toast-enter-active, .toast-leave-active { transition: opacity 0.3s ease, transform 0.3s ease; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(8px); }
 
+/* ── No song ──────────────────────────────────────── */
+.no-song {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 1.25rem 0;
+}
+
+.no-song-icon {
+  width: 2rem;
+  height: 2rem;
+  color: #374151;
+  margin-bottom: 0.25rem;
+}
+
+.no-song-text {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.no-song-sub {
+  font-size: 0.78rem;
+  color: #374151;
+  text-align: center;
+  line-height: 1.4;
+}
+
 /* ── Now playing ──────────────────────────────────── */
 .now-playing {
   width: 100%;
@@ -518,6 +585,58 @@ onUnmounted(() => {
 .playlist-list::-webkit-scrollbar-thumb { background: rgba(29, 185, 84, 0.3); border-radius: 2px; }
 
 .playlist-row { cursor: default; }
+
+/* ── Controls row ─────────────────────────────────── */
+.controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+}
+
+.btn-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.22s ease, color 0.22s ease;
+}
+.btn-control svg { width: 1rem; height: 1rem; }
+.btn-control:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #e5e7eb;
+}
+
+/* ── User row ─────────────────────────────────────── */
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.6rem 0.5rem;
+  border-radius: 0.875rem;
+}
+
+.user-avatar {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+  background: rgba(29, 185, 84, 0.15);
+  border: 1px solid rgba(29, 185, 84, 0.25);
+  color: #1DB954;
+  font-size: 1rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
 
 /* ── Search button ────────────────────────────────── */
 .btn-search {
