@@ -32,13 +32,16 @@ interface SpotifyPlayerInstance {
   connect(): Promise<boolean>
   disconnect(): void
   addListener(event: string, cb: (data: Record<string, unknown>) => void): void
+  activateElement(): void
 }
 
 const route = useRoute()
 const roomCode = route.params.roomCode as string
 const name = history.state?.name as string
 
-const users = ref<string[]>([])
+const users = ref<Record<string, string>>({})
+const hostId = ref('')
+const clientId = ref('')
 const searchOpen = ref(false)
 const searchQuery = ref('')
 const songs = ref<Song[]>([])
@@ -48,7 +51,10 @@ const currentSong = ref<Song | null>(null)
 const remainingMs = ref(0)
 const playlist = ref<Song[]>([])
 const usersOpen = ref(false)
+const resumeVisible = ref(false)
 
+let resumeSong: Song | null = null
+let resumeStartTime = ''
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 let countdownInterval: ReturnType<typeof setInterval> | null = null
 let spotifyPlayer: SpotifyPlayerInstance | null = null
@@ -57,6 +63,7 @@ let currentToken = ''
 
 function showToast(message: string) {
   if (toastTimer) clearTimeout(toastTimer)
+
   toastMessage.value = message
   toastVisible.value = true
   toastTimer = setTimeout(() => { toastVisible.value = false }, 4000)
@@ -113,9 +120,8 @@ function loadSpotifySDK(): Promise<void> {
   })
 }
 
-async function playSong(song: Song) {
+async function playSong(song: Song, positionMs = 0) {
   currentSong.value = song
-  startCountdown(song.duration_ms)
 
   await loadSpotifySDK()
 
@@ -124,28 +130,73 @@ async function playSong(song: Song) {
       name: 'HouseParty',
       getOAuthToken: (cb) => cb(currentToken),
       volume: 0.8,
-      robustness: 'SW_SECURE_CRYPTO',
     })
 
-    const deviceReady = new Promise<string>((resolve) => {
+    spotifyPlayer.addListener('initialization_error', (data) => console.error('Spotify init error:', data))
+    spotifyPlayer.addListener('authentication_error', (data) => console.error('Spotify auth error:', data))
+    spotifyPlayer.addListener('account_error', (data) => console.error('Spotify account error:', data))
+    spotifyPlayer.addListener('playback_error', (data) => console.error('Spotify playback error:', data))
+
+    const deviceReady = new Promise<string>((resolve, reject) => {
       spotifyPlayer!.addListener('ready', (data) => {
         deviceId = data.device_id as string
+        console.log('Spotify player ready, device_id:', deviceId)
         resolve(deviceId)
+      })
+      spotifyPlayer!.addListener('not_ready', (data) => {
+        console.warn('Spotify player not ready:', data)
+        reject(new Error('Spotify player not ready'))
       })
     })
 
-    await spotifyPlayer.connect()
+    const connected = await spotifyPlayer.connect()
+    if (!connected) {
+      console.error('Spotify player failed to connect')
+      spotifyPlayer = null
+      return
+    }
+
+    spotifyPlayer.activateElement()
+
     await deviceReady
+
+    await fetch('https://api.spotify.com/v1/me/player', {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${currentToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ device_ids: [deviceId], play: false }),
+    })
+
+    await new Promise(resolve => setTimeout(resolve, 500))
   }
 
-  await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+  const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${currentToken}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ uris: [song.uri] }),
+    body: JSON.stringify({ uris: [song.uri], position_ms: positionMs }),
   })
+
+  if (!res.ok) {
+    const body = await res.text()
+    console.error('Spotify play API error:', res.status, body)
+  }
+
+  startCountdown(song.duration_ms - positionMs)
+}
+
+function resumePlayback() {
+  if (!resumeSong) return
+  const positionMs = Math.min(
+    Math.max(0, Date.now() - new Date(resumeStartTime).getTime()),
+    resumeSong.duration_ms,
+  )
+  resumeVisible.value = false
+  playSong(resumeSong, positionMs)
 }
 
 function handleEvent(raw: string) {
@@ -153,14 +204,38 @@ function handleEvent(raw: string) {
   console.log('Event received:', event.type, event.payload)
 
   if (event.type === 'joined_room') {
-    const payload = event.payload as { message: string; users: string[] }
+    const payload = event.payload as {
+      message: string
+      users: Record<string, string>
+      host: string
+      client_id: string
+      current_song: Song | null
+      current_song_start_time: string
+      playlist: Song[]
+      token: string
+    }
     users.value = payload.users
+    hostId.value = payload.host
+    clientId.value = payload.client_id
+    playlist.value = payload.playlist ?? []
+    currentToken = payload.token
+    currentSong.value = payload.current_song
+    if (payload.current_song) {
+      const elapsed = Math.max(0, Date.now() - new Date(payload.current_song_start_time).getTime())
+      const remaining = Math.max(0, payload.current_song.duration_ms - elapsed)
+      startCountdown(remaining)
+      if (payload.client_id === payload.host) {
+        resumeSong = payload.current_song
+        resumeStartTime = payload.current_song_start_time
+        resumeVisible.value = true
+      }
+    }
     showToast(payload.message)
   }
 
   if (event.type === 'user_joined') {
-    const payload = event.payload as { name: string }
-    users.value.push(payload.name)
+    const payload = event.payload as { name: string; id: string }
+    users.value[payload.name] = payload.id
     showToast(`${payload.name} has joined`)
   }
 
@@ -173,6 +248,10 @@ function handleEvent(raw: string) {
     const payload = event.payload as { song: Song; token: string }
     currentToken = payload.token
     playSong(payload.song)
+  }
+
+  if (event.type === 'last_song_ended') {
+    currentSong.value = null
   }
 
   if (event.type === 'play_next') {
@@ -265,7 +344,7 @@ onUnmounted(() => {
             <rect class="bar bar-5" x="24" y="9"  width="3" height="6"  rx="1.5"/>
           </svg>
         </div>
-        <p class="tagline">Room <span class="accent">{{ roomCode }}</span> · {{ users.length }} connected</p>
+        <p class="tagline">Room <span class="accent">{{ roomCode }}</span> · {{ Object.keys(users).length }} connected</p>
       </div>
 
       <!-- Now playing -->
@@ -329,6 +408,22 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- Resume playback -->
+    <transition name="backdrop">
+      <div v-if="resumeVisible" class="resume-overlay">
+        <div class="resume-card">
+          <p class="resume-title">Music is playing</p>
+          <p class="resume-sub">Tap to resume playback in this tab</p>
+          <button class="btn-resume" @click="resumePlayback">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            Resume
+          </button>
+        </div>
+      </div>
+    </transition>
+
     <!-- Backdrop -->
     <transition name="backdrop">
       <div v-if="searchOpen || usersOpen" class="backdrop" @click="searchOpen = false; usersOpen = false" />
@@ -339,9 +434,19 @@ onUnmounted(() => {
       <div v-if="usersOpen" class="search-card">
         <p class="search-title">Connected Users</p>
         <ul class="results-list">
-          <li v-for="user in users" :key="user" class="user-row">
-            <div class="user-avatar">{{ user.charAt(0).toUpperCase() }}</div>
-            <span class="song-name">{{ user }}</span>
+          <li v-for="(id, name) in users" :key="id" class="user-row">
+            <div class="user-avatar">{{ String(name).charAt(0).toUpperCase() }}</div>
+            <div class="song-info">
+              <span class="song-name">{{ name }}</span>
+              <span v-if="id === hostId" class="host-label">host</span>
+            </div>
+            <svg v-if="id === hostId" class="eq-icon host-eq" viewBox="0 0 27 24" fill="currentColor" aria-hidden="true">
+              <rect class="bar bar-1" x="0"  y="9"  width="3" height="6"  rx="1.5"/>
+              <rect class="bar bar-2" x="6"  y="5"  width="3" height="14" rx="1.5"/>
+              <rect class="bar bar-3" x="12" y="2"  width="3" height="20" rx="1.5"/>
+              <rect class="bar bar-4" x="18" y="6"  width="3" height="12" rx="1.5"/>
+              <rect class="bar bar-5" x="24" y="9"  width="3" height="6"  rx="1.5"/>
+            </svg>
           </li>
         </ul>
       </div>
@@ -623,6 +728,20 @@ onUnmounted(() => {
   border-radius: 0.875rem;
 }
 
+.host-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: #1DB954;
+}
+
+.host-eq {
+  width: 1rem;
+  height: 1rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .user-avatar {
   width: 2.75rem;
   height: 2.75rem;
@@ -810,4 +929,59 @@ onUnmounted(() => {
 .search-card-enter-active { transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s ease; }
 .search-card-leave-active { transition: transform 0.25s ease, opacity 0.2s ease; }
 .search-card-enter-from, .search-card-leave-to { transform: translateX(-50%) translateY(2rem); opacity: 0; }
+
+/* ── Resume overlay ───────────────────────────────── */
+.resume-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(6px);
+}
+
+.resume-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 2.5rem 2rem;
+  border-radius: 2rem;
+  background: #13131a;
+  border: 1px solid rgba(29, 185, 84, 0.25);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7);
+  text-align: center;
+}
+
+.resume-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #e5e7eb;
+}
+
+.resume-sub {
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.btn-resume {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0.75rem 1.75rem;
+  border-radius: 999px;
+  background: #1DB954;
+  color: #000;
+  font-size: 0.95rem;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.btn-resume svg { width: 1rem; height: 1rem; }
+.btn-resume:hover { transform: scale(1.04); box-shadow: 0 6px 24px rgba(29, 185, 84, 0.4); }
+.btn-resume:active { transform: scale(0.97); }
 </style>
