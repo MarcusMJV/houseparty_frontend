@@ -40,6 +40,7 @@ const roomCode = route.params.roomCode as string
 const name = history.state?.name as string
 
 const users = ref<Record<string, string>>({})
+const skip_record = ref<string[]>([])
 const hostId = ref('')
 const clientId = ref('')
 const searchOpen = ref(false)
@@ -102,7 +103,7 @@ function startCountdown(durationMs: number) {
     if (remainingMs.value <= 0) {
       clearInterval(countdownInterval!)
       countdownInterval = null
-      sendEvent('song-ended', {})
+      if (clientId.value === hostId.value) sendEvent('song-ended', {})
     }
   }, 1000)
 }
@@ -189,6 +190,11 @@ async function playSong(song: Song, positionMs = 0) {
   startCountdown(song.duration_ms - positionMs)
 }
 
+function voteSkip() {
+  if (skip_record.value.includes(name)) return
+  sendEvent('song-skip-vote', { user: name })
+}
+
 function resumePlayback() {
   if (!resumeSong) return
   const positionMs = Math.min(
@@ -212,12 +218,14 @@ function handleEvent(raw: string) {
       current_song: Song | null
       current_song_start_time: string
       playlist: Song[]
+      skip_record: string[]
       token: string
     }
     users.value = payload.users
     hostId.value = payload.host
     clientId.value = payload.client_id
     playlist.value = payload.playlist ?? []
+    skip_record.value = payload.skip_record ?? []
     currentToken = payload.token
     currentSong.value = payload.current_song
     if (payload.current_song) {
@@ -247,7 +255,12 @@ function handleEvent(raw: string) {
   if (event.type === 'set_song') {
     const payload = event.payload as { song: Song; token: string }
     currentToken = payload.token
-    playSong(payload.song)
+    if (clientId.value === hostId.value) {
+      playSong(payload.song)
+    } else {
+      currentSong.value = payload.song
+      startCountdown(payload.song.duration_ms)
+    }
   }
 
   if (event.type === 'last_song_ended') {
@@ -258,12 +271,36 @@ function handleEvent(raw: string) {
     const payload = event.payload as { token: string }
     currentToken = payload.token
     const next = playlist.value.shift()
-    if (next) playSong(next)
+    if (!next) return
+    if (clientId.value === hostId.value) {
+      playSong(next)
+    } else {
+      currentSong.value = next
+      startCountdown(next.duration_ms)
+    }
   }
 
   if (event.type === 'update_playlist') {
     const payload = event.payload as { song: Song }
     playlist.value.push(payload.song)
+  }
+
+  if (event.type === 'song_skipped') {
+    skip_record.value = []
+    showToast('Song skipped')
+  }
+
+  if (event.type === 'song_skip_vote') {
+    const payload = event.payload as { user: string }
+    skip_record.value.push(payload.user)
+    showToast(`${payload.user} voted to skip`)
+  }
+
+  if (event.type === 'user_left') {
+    const payload = event.payload as { name: string; id: string }
+    delete users.value[payload.name]
+    skip_record.value = skip_record.value.filter(n => n !== payload.name)
+    showToast(`${payload.name} has left`)
   }
 }
 
@@ -382,29 +419,35 @@ onUnmounted(() => {
       </div>
 
       <!-- Bottom controls -->
-      <div class="controls-row">
-        <button class="btn-control" @click="usersOpen = true" aria-label="View users">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-            <circle cx="9" cy="7" r="4"/>
-            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-          </svg>
-        </button>
+      <div class="controls-wrap">
+        <div class="controls-row">
+          <button class="btn-control" @click="usersOpen = true" aria-label="View users">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </button>
 
-        <button class="btn-search" @click="searchOpen = true" aria-label="Search songs">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"/>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-        </button>
+          <button class="btn-search" @click="searchOpen = true" aria-label="Search songs">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </button>
 
-        <button class="btn-control" @click="sendEvent('skip-song', {})" aria-label="Skip song">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="5 4 15 12 5 20 5 4"/>
-            <line x1="19" y1="5" x2="19" y2="19"/>
-          </svg>
-        </button>
+          <button class="btn-control" @click="voteSkip" aria-label="Skip song">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="5 4 15 12 5 20 5 4"/>
+              <line x1="19" y1="5" x2="19" y2="19"/>
+            </svg>
+          </button>
+        </div>
+
+        <span v-if="currentSong" class="skip-count">
+          {{ skip_record.length }}/{{ Object.keys(users).length }} Skips
+        </span>
       </div>
     </div>
 
@@ -717,6 +760,21 @@ onUnmounted(() => {
   transform: translateY(-1px);
   border-color: rgba(255, 255, 255, 0.35);
   color: #e5e7eb;
+}
+
+/* ── Controls wrap ────────────────────────────────── */
+.controls-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.skip-count {
+  font-size: 0.65rem;
+  color: #6b7280;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 
 /* ── User row ─────────────────────────────────────── */
