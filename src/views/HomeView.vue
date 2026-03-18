@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { API_BASE } from '@/utils/api'
 
 const router = useRouter()
 
-const step = ref<'home' | 'spotify' | 'join' | 'username'>('home')
-const roomCode = ref('')
+const prefilledCode = history.state?.roomCode as string | undefined
+const step = ref<'home' | 'spotify' | 'join' | 'username'>(prefilledCode ? 'username' : 'home')
+const roomCode = ref(prefilledCode?.trim() ?? '')
 const spotifyPassword = ref('')
 const username = ref('')
 const loading = ref(false)
@@ -23,7 +25,7 @@ function showToast(message: string) {
 async function submitSpotify() {
   loading.value = true
   try {
-    const res = await fetch('http://localhost:8080/create', {
+    const res = await fetch(`${API_BASE}/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: spotifyPassword.value }),
@@ -47,11 +49,12 @@ async function submitSpotify() {
 }
 
 function submitJoinCode() {
+  roomCode.value = roomCode.value.trim()
   step.value = 'username'
 }
 
 function submitUsername() {
-  router.push({ path: `/room/${roomCode.value}`, state: { name: username.value } })
+  router.push({ path: `/room/${roomCode.value}`, state: { name: username.value.trim() } })
 }
 </script>
 

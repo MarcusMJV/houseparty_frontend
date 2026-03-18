@@ -1,18 +1,15 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
-
-interface Song {
-  id: string
-  name: string
-  artists: string[]
-  album: string
-  duration_ms: number
-  image: { url: string; width: number; height: number }
-  external_url: string
-  uri: string
-  explicit: boolean
-}
+import { useRoute, useRouter } from 'vue-router'
+import type { Song } from '@/types/song'
+import { API_BASE, WS_BASE } from '@/utils/api'
+import RoomToast from '@/components/room/RoomToast.vue'
+import NowPlaying from '@/components/room/NowPlaying.vue'
+import PlaylistQueue from '@/components/room/PlaylistQueue.vue'
+import RoomControls from '@/components/room/RoomControls.vue'
+import ResumeOverlay from '@/components/room/ResumeOverlay.vue'
+import UsersPanel from '@/components/room/UsersPanel.vue'
+import SearchPanel from '@/components/room/SearchPanel.vue'
 
 declare global {
   interface Window {
@@ -36,6 +33,7 @@ interface SpotifyPlayerInstance {
 }
 
 const route = useRoute()
+const router = useRouter()
 const roomCode = route.params.roomCode as string
 const name = history.state?.name as string
 
@@ -44,7 +42,6 @@ const skip_record = ref<string[]>([])
 const hostId = ref('')
 const clientId = ref('')
 const searchOpen = ref(false)
-const searchQuery = ref('')
 const songs = ref<Song[]>([])
 const toastMessage = ref('')
 const toastVisible = ref(false)
@@ -64,7 +61,6 @@ let currentToken = ''
 
 function showToast(message: string) {
   if (toastTimer) clearTimeout(toastTimer)
-
   toastMessage.value = message
   toastVisible.value = true
   toastTimer = setTimeout(() => { toastVisible.value = false }, 4000)
@@ -75,24 +71,14 @@ function sendEvent(type: string, payload: unknown) {
   ws?.send(JSON.stringify({ type, payload }))
 }
 
-function submitSearch() {
-  if (!searchQuery.value.trim()) return
-  sendEvent('search-song', { search: searchQuery.value.trim() })
+function onSearch(query: string) {
+  sendEvent('search-song', { search: query })
 }
 
 function selectSong(song: Song) {
   sendEvent('add-song', song)
   songs.value = []
-  searchQuery.value = ''
   searchOpen.value = false
-}
-
-
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000)
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
 function startCountdown(durationMs: number) {
@@ -173,6 +159,11 @@ async function playSong(song: Song, positionMs = 0) {
     await new Promise(resolve => setTimeout(resolve, 500))
   }
 
+  await fetch(`https://api.spotify.com/v1/me/player/pause?device_id=${deviceId}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${currentToken}` },
+  })
+
   const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
     method: 'PUT',
     headers: {
@@ -185,9 +176,16 @@ async function playSong(song: Song, positionMs = 0) {
   if (!res.ok) {
     const body = await res.text()
     console.error('Spotify play API error:', res.status, body)
+    return
   }
 
+  const actualStartTime = new Date(Date.now() - positionMs).toISOString()
+  sendEvent('song-started', { start_time: actualStartTime })
   startCountdown(song.duration_ms - positionMs)
+}
+
+function selectNewHost(id: string) {
+  sendEvent('selected-new-host', { id })
 }
 
 function voteSkip() {
@@ -265,6 +263,16 @@ function handleEvent(raw: string) {
 
   if (event.type === 'last_song_ended') {
     currentSong.value = null
+    if (countdownInterval) {
+      clearInterval(countdownInterval)
+      countdownInterval = null
+    }
+    if (clientId.value === hostId.value) {
+      fetch('https://api.spotify.com/v1/me/player/pause?device_id=' + deviceId, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${currentToken}` },
+      })
+    }
   }
 
   if (event.type === 'play_next') {
@@ -285,6 +293,14 @@ function handleEvent(raw: string) {
     playlist.value.push(payload.song)
   }
 
+  if (event.type === 'update_start_time') {
+    const payload = event.payload as { start_time: string }
+    if (currentSong.value) {
+      const remaining = Math.max(0, currentSong.value.duration_ms - (Date.now() - new Date(payload.start_time).getTime()))
+      startCountdown(remaining)
+    }
+  }
+
   if (event.type === 'song_skipped') {
     skip_record.value = []
     showToast('Song skipped')
@@ -294,6 +310,28 @@ function handleEvent(raw: string) {
     const payload = event.payload as { user: string }
     skip_record.value.push(payload.user)
     showToast(`${payload.user} voted to skip`)
+  }
+
+  if (event.type === 'set_host') {
+    const payload = event.payload as { message: string; host: string; token: string; current_song_start_time: string }
+    hostId.value = payload.host
+    currentToken = payload.token
+    showToast(payload.message)
+    if (currentSong.value) {
+      resumeSong = currentSong.value
+      resumeStartTime = payload.current_song_start_time
+      resumeVisible.value = true
+    }
+  }
+
+  if (event.type === 'update_host') {
+    const payload = event.payload as { message: string; host: string; token: string; current_song_start_time: string }
+    hostId.value = payload.host
+    showToast(payload.message)
+    if (currentSong.value) {
+      const remaining = Math.max(0, currentSong.value.duration_ms - (Date.now() - new Date(payload.current_song_start_time).getTime()))
+      startCountdown(remaining)
+    }
   }
 
   if (event.type === 'user_left') {
@@ -307,23 +345,17 @@ function handleEvent(raw: string) {
 let ws: WebSocket | null = null
 
 onMounted(() => {
-  ws = new WebSocket(`ws://localhost:8080/join/room/${roomCode}/${encodeURIComponent(name)}`)
-
-  ws.onopen = () => {
-    sendEvent('join-room', { name })
+  if (!name) {
+    router.replace({ path: '/', state: { roomCode } })
+    return
   }
 
-  ws.onmessage = (event) => {
-    handleEvent(event.data)
-  }
+  ws = new WebSocket(`${WS_BASE}/join/room/${roomCode}/${encodeURIComponent(name)}`)
 
-  ws.onerror = (event) => {
-    console.error('WebSocket error:', event)
-  }
-
-  ws.onclose = (event) => {
-    console.log('WebSocket closed:', event.code, event.reason)
-  }
+  ws.onopen = () => { sendEvent('join-room', { name }) }
+  ws.onmessage = (event) => { handleEvent(event.data) }
+  ws.onerror = (event) => { console.error('WebSocket error:', event) }
+  ws.onclose = (event) => { console.log('WebSocket closed:', event.code, event.reason) }
 })
 
 onUnmounted(() => {
@@ -337,12 +369,7 @@ onUnmounted(() => {
   <div class="page">
     <div class="glow" aria-hidden="true"></div>
 
-    <!-- Toast -->
-    <transition name="toast">
-      <div v-if="toastVisible" class="toast" role="alert">
-        {{ toastMessage }}
-      </div>
-    </transition>
+    <RoomToast :message="toastMessage" :visible="toastVisible" />
 
     <!-- GitHub link -->
     <a
@@ -384,155 +411,46 @@ onUnmounted(() => {
         <p class="tagline">Room <span class="accent">{{ roomCode }}</span> · {{ Object.keys(users).length }} connected</p>
       </div>
 
-      <!-- Now playing -->
-      <transition name="now-playing" mode="out-in">
-        <div v-if="!currentSong" key="empty" class="no-song">
-          <p class="no-song-text">No song playing</p>
-          <p class="no-song-sub">Search and choose a song to get the party started</p>
-        </div>
-        <div v-else key="playing" class="now-playing">
-          <p class="now-playing-label">Now Playing</p>
-          <div class="song-row now-playing-row">
-            <img :src="currentSong.image.url" :alt="currentSong.name" class="song-img song-img--lg" />
-            <div class="song-info">
-              <span class="song-name">{{ currentSong.name }}</span>
-              <span class="song-artist">{{ currentSong.artists.join(', ') }}</span>
-            </div>
-            <span class="song-duration countdown">{{ formatDuration(remainingMs) }}</span>
-          </div>
-        </div>
-      </transition>
+      <NowPlaying :song="currentSong" :remaining-ms="remainingMs" />
 
-      <!-- Playlist -->
-      <div v-if="playlist.length" class="playlist">
-        <p class="now-playing-label">Up Next</p>
-        <ul class="playlist-list">
-          <li v-for="song in playlist" :key="song.id" class="song-row playlist-row">
-            <img :src="song.image.url" :alt="song.name" class="song-img" />
-            <div class="song-info">
-              <span class="song-name">{{ song.name }}</span>
-              <span class="song-artist">{{ song.artists.join(', ') }}</span>
-            </div>
-            <span class="song-duration">{{ formatDuration(song.duration_ms) }}</span>
-          </li>
-        </ul>
-      </div>
+      <PlaylistQueue :playlist="playlist" />
 
-      <!-- Bottom controls -->
-      <div class="controls-wrap">
-        <div class="controls-row">
-          <button class="btn-control" @click="usersOpen = true" aria-label="View users">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-              <circle cx="9" cy="7" r="4"/>
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-            </svg>
-          </button>
-
-          <button class="btn-search" @click="searchOpen = true" aria-label="Search songs">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-          </button>
-
-          <button class="btn-control" @click="voteSkip" aria-label="Skip song">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="5 4 15 12 5 20 5 4"/>
-              <line x1="19" y1="5" x2="19" y2="19"/>
-            </svg>
-          </button>
-        </div>
-
-        <span v-if="currentSong" class="skip-count">
-          {{ skip_record.length }}/{{ Object.keys(users).length }} Skips
-        </span>
-      </div>
+      <RoomControls
+        :has-song="!!currentSong"
+        :skip-count="skip_record.length"
+        :total-users="Object.keys(users).length"
+        @open-users="usersOpen = true"
+        @open-search="searchOpen = true"
+        @vote-skip="voteSkip"
+      />
     </div>
 
-    <!-- Resume playback -->
-    <transition name="backdrop">
-      <div v-if="resumeVisible" class="resume-overlay">
-        <div class="resume-card">
-          <p class="resume-title">Music is playing</p>
-          <p class="resume-sub">Tap to resume playback in this tab</p>
-          <button class="btn-resume" @click="resumePlayback">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <polygon points="5 3 19 12 5 21 5 3"/>
-            </svg>
-            Resume
-          </button>
-        </div>
-      </div>
-    </transition>
+    <ResumeOverlay :visible="resumeVisible" @resume="resumePlayback" />
 
-    <!-- Backdrop -->
+    <!-- Backdrop (shared between search and users panels) -->
     <transition name="backdrop">
       <div v-if="searchOpen || usersOpen" class="backdrop" @click="searchOpen = false; usersOpen = false" />
     </transition>
 
-    <!-- Users card -->
+    <!-- Users panel -->
     <transition name="search-card">
-      <div v-if="usersOpen" class="search-card">
-        <p class="search-title">Connected Users</p>
-        <ul class="results-list">
-          <li v-for="(id, name) in users" :key="id" class="user-row">
-            <div class="user-avatar">{{ String(name).charAt(0).toUpperCase() }}</div>
-            <div class="song-info">
-              <span class="song-name">{{ name }}</span>
-              <span v-if="id === hostId" class="host-label">host</span>
-            </div>
-            <svg v-if="id === hostId" class="eq-icon host-eq" viewBox="0 0 27 24" fill="currentColor" aria-hidden="true">
-              <rect class="bar bar-1" x="0"  y="9"  width="3" height="6"  rx="1.5"/>
-              <rect class="bar bar-2" x="6"  y="5"  width="3" height="14" rx="1.5"/>
-              <rect class="bar bar-3" x="12" y="2"  width="3" height="20" rx="1.5"/>
-              <rect class="bar bar-4" x="18" y="6"  width="3" height="12" rx="1.5"/>
-              <rect class="bar bar-5" x="24" y="9"  width="3" height="6"  rx="1.5"/>
-            </svg>
-          </li>
-        </ul>
-      </div>
+      <UsersPanel
+        v-if="usersOpen"
+        :users="users"
+        :host-id="hostId"
+        :client-id="clientId"
+        @select-host="selectNewHost"
+      />
     </transition>
 
-    <!-- Search card -->
+    <!-- Search panel -->
     <transition name="search-card">
-      <div v-if="searchOpen" class="search-card">
-        <p class="search-title">Search for a song</p>
-
-        <form class="search-form" @submit.prevent="submitSearch">
-          <input
-            v-model="searchQuery"
-            type="text"
-            placeholder="Artist, song, album…"
-            class="input-field"
-            autofocus
-          />
-          <button type="submit" class="btn-search-submit" aria-label="Search">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-          </button>
-        </form>
-
-        <!-- Results -->
-        <ul v-if="songs.length" class="results-list">
-          <li
-            v-for="song in songs"
-            :key="song.id"
-            class="song-row"
-            @click="selectSong(song)"
-          >
-            <img :src="song.image.url" :alt="song.name" class="song-img" />
-            <div class="song-info">
-              <span class="song-name">{{ song.name }}</span>
-              <span class="song-artist">{{ song.artists.join(', ') }}</span>
-            </div>
-            <span class="song-duration">{{ formatDuration(song.duration_ms) }}</span>
-          </li>
-        </ul>
-      </div>
+      <SearchPanel
+        v-if="searchOpen"
+        :results="songs"
+        @submit-search="onSearch"
+        @select-song="selectSong"
+      />
     </transition>
   </div>
 </template>
@@ -623,220 +541,7 @@ onUnmounted(() => {
 }
 .github-link:hover { color: #fff; }
 
-.toast {
-  position: fixed;
-  bottom: 2rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 100;
-  padding: 0.75rem 1.25rem;
-  border-radius: 0.75rem;
-  background: #111613;
-  border: 1px solid rgba(29, 185, 84, 0.4);
-  color: #86efac;
-  font-size: 0.875rem;
-  white-space: nowrap;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-}
-.toast-enter-active, .toast-leave-active { transition: opacity 0.3s ease, transform 0.3s ease; }
-.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(8px); }
-
-/* ── No song ──────────────────────────────────────── */
-.no-song {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 1.25rem 0;
-}
-
-.no-song-icon {
-  width: 2rem;
-  height: 2rem;
-  color: #374151;
-  margin-bottom: 0.25rem;
-}
-
-.no-song-text {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #4b5563;
-}
-
-.no-song-sub {
-  font-size: 0.78rem;
-  color: #374151;
-  text-align: center;
-  line-height: 1.4;
-}
-
-/* ── Now playing ──────────────────────────────────── */
-.now-playing {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.now-playing-label {
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #1DB954;
-}
-
-.now-playing-row {
-  background: rgba(29, 185, 84, 0.06);
-  border: 1px solid rgba(29, 185, 84, 0.15);
-  cursor: default;
-}
-.now-playing-row:hover { background: rgba(29, 185, 84, 0.09); }
-
-.song-img--lg {
-  width: 3.25rem;
-  height: 3.25rem;
-}
-
-.countdown {
-  color: #1DB954;
-  font-variant-numeric: tabular-nums;
-}
-
-.now-playing-enter-active { transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.22, 1, 0.36, 1); }
-.now-playing-leave-active { transition: opacity 0.25s ease, transform 0.25s ease; }
-.now-playing-enter-from, .now-playing-leave-to { opacity: 0; transform: translateY(-8px); }
-
-/* ── Playlist ─────────────────────────────────────── */
-.playlist {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.playlist-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  max-height: 12rem;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(29, 185, 84, 0.3) transparent;
-}
-.playlist-list::-webkit-scrollbar { width: 4px; }
-.playlist-list::-webkit-scrollbar-track { background: transparent; }
-.playlist-list::-webkit-scrollbar-thumb { background: rgba(29, 185, 84, 0.3); border-radius: 2px; }
-
-.playlist-row { cursor: default; }
-
-/* ── Controls row ─────────────────────────────────── */
-.controls-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1.25rem;
-}
-
-.btn-control {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.12);
-  background: transparent;
-  color: #6b7280;
-  cursor: pointer;
-  transition: transform 0.18s ease, border-color 0.22s ease, color 0.22s ease;
-}
-.btn-control svg { width: 1rem; height: 1rem; }
-.btn-control:hover {
-  transform: translateY(-1px);
-  border-color: rgba(255, 255, 255, 0.35);
-  color: #e5e7eb;
-}
-
-/* ── Controls wrap ────────────────────────────────── */
-.controls-wrap {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.skip-count {
-  font-size: 0.65rem;
-  color: #6b7280;
-  letter-spacing: 0.03em;
-  white-space: nowrap;
-}
-
-/* ── User row ─────────────────────────────────────── */
-.user-row {
-  display: flex;
-  align-items: center;
-  gap: 0.875rem;
-  padding: 0.6rem 0.5rem;
-  border-radius: 0.875rem;
-}
-
-.host-label {
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  color: #1DB954;
-}
-
-.host-eq {
-  width: 1rem;
-  height: 1rem;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-.user-avatar {
-  width: 2.75rem;
-  height: 2.75rem;
-  border-radius: 50%;
-  background: rgba(29, 185, 84, 0.15);
-  border: 1px solid rgba(29, 185, 84, 0.25);
-  color: #1DB954;
-  font-size: 1rem;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-/* ── Search button ────────────────────────────────── */
-.btn-search {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 3rem;
-  height: 3rem;
-  border-radius: 50%;
-  border: 2px solid rgba(29, 185, 84, 0.35);
-  background: #111613;
-  color: #1DB954;
-  cursor: pointer;
-  transition: transform 0.18s ease, border-color 0.22s ease, box-shadow 0.22s ease;
-}
-.btn-search svg { width: 1.25rem; height: 1.25rem; }
-.btn-search:hover {
-  transform: translateY(-1px);
-  border-color: rgba(29, 185, 84, 0.85);
-  box-shadow: 0 6px 28px rgba(29, 185, 84, 0.28);
-}
-
-/* ── Backdrop ─────────────────────────────────────── */
+/* Backdrop */
 .backdrop {
   position: fixed;
   inset: 0;
@@ -844,202 +549,14 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.65);
   backdrop-filter: blur(4px);
 }
-.backdrop-enter-active, .backdrop-leave-active { transition: opacity 0.3s ease; }
-.backdrop-enter-from, .backdrop-leave-to { opacity: 0; }
+.backdrop-enter-active,
+.backdrop-leave-active { transition: opacity 0.3s ease; }
+.backdrop-enter-from,
+.backdrop-leave-to { opacity: 0; }
 
-/* ── Search card ──────────────────────────────────── */
-.search-card {
-  position: fixed;
-  bottom: 2rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 30;
-  width: 90%;
-  max-width: 28rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-  padding: 2rem 1.5rem;
-  border-radius: 2rem;
-  background: #13131a;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7);
-  max-height: 80vh;
-  overflow: hidden;
-}
-
-.search-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: #e5e7eb;
-  text-align: center;
-}
-
-.search-form {
-  display: flex;
-  flex-direction: row;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.input-field {
-  width: 100%;
-  padding: 0.9rem 1rem;
-  border-radius: 0.875rem;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: #e5e7eb;
-  font-size: 0.975rem;
-  outline: none;
-  transition: border-color 0.2s ease, background 0.2s ease;
-}
-.input-field::placeholder { color: #6b7280; }
-.input-field:focus {
-  border-color: #1DB954;
-  background: rgba(255, 255, 255, 0.09);
-}
-
-.btn-search-submit {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 2.75rem;
-  height: 2.75rem;
-  border-radius: 0.875rem;
-  background: #111613;
-  color: #1DB954;
-  border: 2px solid rgba(29, 185, 84, 0.35);
-  cursor: pointer;
-  transition: transform 0.18s ease, border-color 0.22s ease, box-shadow 0.22s ease;
-}
-.btn-search-submit svg { width: 1.1rem; height: 1.1rem; }
-.btn-search-submit:hover {
-  transform: translateY(-1px);
-  border-color: rgba(29, 185, 84, 0.85);
-  box-shadow: 0 4px 16px rgba(29, 185, 84, 0.28);
-}
-.btn-search-submit:active { transform: scale(0.95); }
-
-/* ── Results ──────────────────────────────────────── */
-.results-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  overflow-y: auto;
-  max-height: 18rem;
-  margin: 0;
-  padding: 0;
-}
-
-.song-row {
-  display: flex;
-  align-items: center;
-  gap: 0.875rem;
-  padding: 0.6rem 0.5rem;
-  border-radius: 0.875rem;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-.song-row:hover { background: rgba(255, 255, 255, 0.06); }
-
-.song-img {
-  width: 2.75rem;
-  height: 2.75rem;
-  border-radius: 0.5rem;
-  object-fit: cover;
-  flex-shrink: 0;
-}
-
-.song-info {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  flex: 1;
-  min-width: 0;
-}
-
-.song-name {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #e5e7eb;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.song-artist {
-  font-size: 0.8rem;
-  color: #6b7280;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.song-duration {
-  font-size: 0.8rem;
-  color: #6b7280;
-  flex-shrink: 0;
-}
-
-/* ── Search card slide-up transition ─────────────── */
+/* Search card slide-up transition (used for both UsersPanel and SearchPanel) */
 .search-card-enter-active { transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s ease; }
 .search-card-leave-active { transition: transform 0.25s ease, opacity 0.2s ease; }
-.search-card-enter-from, .search-card-leave-to { transform: translateX(-50%) translateY(2rem); opacity: 0; }
-
-/* ── Resume overlay ───────────────────────────────── */
-.resume-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(6px);
-}
-
-.resume-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 2.5rem 2rem;
-  border-radius: 2rem;
-  background: #13131a;
-  border: 1px solid rgba(29, 185, 84, 0.25);
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7);
-  text-align: center;
-}
-
-.resume-title {
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #e5e7eb;
-}
-
-.resume-sub {
-  font-size: 0.85rem;
-  color: #6b7280;
-}
-
-.btn-resume {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-  padding: 0.75rem 1.75rem;
-  border-radius: 999px;
-  background: #1DB954;
-  color: #000;
-  font-size: 0.95rem;
-  font-weight: 700;
-  border: none;
-  cursor: pointer;
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
-}
-.btn-resume svg { width: 1rem; height: 1rem; }
-.btn-resume:hover { transform: scale(1.04); box-shadow: 0 6px 24px rgba(29, 185, 84, 0.4); }
-.btn-resume:active { transform: scale(0.97); }
+.search-card-enter-from,
+.search-card-leave-to { transform: translateX(-50%) translateY(2rem); opacity: 0; }
 </style>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { API_BASE } from '@/utils/api'
 
 const loading = ref(true)
 const success = ref(false)
@@ -16,7 +17,7 @@ onMounted(async () => {
   }
 
   try {
-    const res = await fetch(`http://localhost:8080/spotify/${code}`)
+    const res = await fetch(`${API_BASE}/spotify/${code}`)
     if (res.ok) {
       success.value = true
     } else {
