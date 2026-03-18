@@ -11,6 +11,7 @@ CLAUDE.md
 memory
 
 node_modules
+package-lock.json
 .DS_Store
 dist
 dist-ssr
