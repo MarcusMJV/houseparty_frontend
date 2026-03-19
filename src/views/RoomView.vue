@@ -56,6 +56,7 @@ let resumeStartTime = ''
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 let countdownInterval: ReturnType<typeof setInterval> | null = null
 let spotifyPlayer: SpotifyPlayerInstance | null = null
+let playerActivated = false
 let deviceId = ''
 let currentToken = ''
 
@@ -107,43 +108,59 @@ function loadSpotifySDK(): Promise<void> {
   })
 }
 
+// Create the player object synchronously — no user gesture needed for this.
+// activateElement() is called separately from a user gesture (resumePlayback).
+function createPlayer() {
+  if (spotifyPlayer || !window.Spotify) return
+  spotifyPlayer = new window.Spotify.Player({
+    name: 'HouseParty',
+    getOAuthToken: (cb) => cb(currentToken),
+    volume: 0.8,
+  })
+  spotifyPlayer.addListener('initialization_error', (data) => console.error('Spotify init error:', data))
+  spotifyPlayer.addListener('authentication_error', (data) => console.error('Spotify auth error:', data))
+  spotifyPlayer.addListener('account_error', (data) => console.error('Spotify account error:', data))
+  spotifyPlayer.addListener('playback_error', (data) => console.error('Spotify playback error:', data))
+  spotifyPlayer.addListener('ready', (data) => {
+    deviceId = data.device_id as string
+    console.log('Spotify player ready, device_id:', deviceId)
+  })
+  spotifyPlayer.addListener('not_ready', (data) => console.warn('Spotify player not ready:', data))
+}
+
 async function playSong(song: Song, positionMs = 0) {
   currentSong.value = song
 
   await loadSpotifySDK()
+  createPlayer()
 
-  if (!spotifyPlayer) {
-    spotifyPlayer = new window.Spotify.Player({
-      name: 'HouseParty',
-      getOAuthToken: (cb) => cb(currentToken),
-      volume: 0.8,
-    })
+  if (!playerActivated) {
+    // Safari (and other browsers) block audio without a user gesture.
+    // activateElement() must be called synchronously from a click handler.
+    // Show the resume overlay so the user provides that gesture.
+    resumeSong = song
+    resumeStartTime = new Date(Date.now() - positionMs).toISOString()
+    resumeVisible.value = true
+    startCountdown(song.duration_ms - positionMs)
+    return
+  }
 
-    spotifyPlayer.addListener('initialization_error', (data) => console.error('Spotify init error:', data))
-    spotifyPlayer.addListener('authentication_error', (data) => console.error('Spotify auth error:', data))
-    spotifyPlayer.addListener('account_error', (data) => console.error('Spotify account error:', data))
-    spotifyPlayer.addListener('playback_error', (data) => console.error('Spotify playback error:', data))
-
+  if (!deviceId) {
     const deviceReady = new Promise<string>((resolve, reject) => {
       spotifyPlayer!.addListener('ready', (data) => {
         deviceId = data.device_id as string
-        console.log('Spotify player ready, device_id:', deviceId)
         resolve(deviceId)
       })
-      spotifyPlayer!.addListener('not_ready', (data) => {
-        console.warn('Spotify player not ready:', data)
-        reject(new Error('Spotify player not ready'))
-      })
+      spotifyPlayer!.addListener('not_ready', () => reject(new Error('Spotify player not ready')))
     })
 
-    const connected = await spotifyPlayer.connect()
+    const connected = await spotifyPlayer!.connect()
     if (!connected) {
       console.error('Spotify player failed to connect')
       spotifyPlayer = null
+      playerActivated = false
       return
     }
-
-    spotifyPlayer.activateElement()
 
     await deviceReady
 
@@ -195,6 +212,15 @@ function voteSkip() {
 
 function resumePlayback() {
   if (!resumeSong) return
+
+  // activateElement() MUST be called synchronously here, before any await,
+  // so Safari recognises it as part of the user gesture (button click).
+  createPlayer()
+  if (spotifyPlayer && !playerActivated) {
+    spotifyPlayer.activateElement()
+    playerActivated = true
+  }
+
   const positionMs = Math.min(
     Math.max(0, Date.now() - new Date(resumeStartTime).getTime()),
     resumeSong.duration_ms,
@@ -226,6 +252,10 @@ function handleEvent(raw: string) {
     skip_record.value = payload.skip_record ?? []
     currentToken = payload.token
     currentSong.value = payload.current_song
+    if (payload.client_id === payload.host) {
+      // Pre-load SDK so window.Spotify exists when the user clicks Resume
+      loadSpotifySDK().then(createPlayer)
+    }
     if (payload.current_song) {
       const elapsed = Math.max(0, Date.now() - new Date(payload.current_song_start_time).getTime())
       const remaining = Math.max(0, payload.current_song.duration_ms - elapsed)
@@ -317,6 +347,8 @@ function handleEvent(raw: string) {
     hostId.value = payload.host
     currentToken = payload.token
     showToast(payload.message)
+    // Pre-load SDK for the new host
+    loadSpotifySDK().then(createPlayer)
     if (currentSong.value) {
       resumeSong = currentSong.value
       resumeStartTime = payload.current_song_start_time
