@@ -6,6 +6,7 @@ import { API_BASE } from '@/utils/api'
 const router = useRouter()
 
 const prefilledCode = history.state?.roomCode as string | undefined
+const prefilledError = history.state?.error as string | undefined
 const step = ref<'home' | 'spotify' | 'join' | 'username'>(prefilledCode ? 'username' : 'home')
 const roomCode = ref(prefilledCode?.trim() ?? '')
 const spotifyPassword = ref('')
@@ -21,6 +22,8 @@ function showToast(message: string) {
   toastVisible.value = true
   toastTimer = setTimeout(() => { toastVisible.value = false }, 4000)
 }
+
+if (prefilledError) showToast(prefilledError)
 
 async function submitSpotify() {
   loading.value = true
@@ -60,17 +63,14 @@ function submitUsername() {
 
 <template>
   <div class="page">
-    <!-- Soft glow behind card -->
     <div class="glow" aria-hidden="true"></div>
 
-    <!-- Toast -->
     <transition name="toast">
       <div v-if="toastVisible" class="toast" role="alert">
         {{ toastMessage }}
       </div>
     </transition>
 
-    <!-- GitHub link -->
     <a
       href="https://github.com/MarcusMJV/houseparty_backend"
       target="_blank"
@@ -92,16 +92,13 @@ function submitUsername() {
       </svg>
     </a>
 
-    <!-- Card -->
     <div class="card slide-up" style="animation-delay: 0ms;">
 
-      <!-- Logo + tagline -->
       <div class="flex flex-col items-center gap-2">
         <div class="flex items-center gap-3">
           <h1 class="text-5xl font-bold tracking-tight text-white">
             House<span class="accent">Party</span>
           </h1>
-          <!-- Equalizer icon -->
           <svg class="eq-icon" viewBox="0 0 27 24" fill="currentColor" aria-hidden="true">
             <rect class="bar bar-1" x="0"  y="9"  width="3" height="6"  rx="1.5"/>
             <rect class="bar bar-2" x="6"  y="5"  width="3" height="14" rx="1.5"/>
@@ -113,7 +110,6 @@ function submitUsername() {
         <p v-if="step === 'home'" class="tagline">Queue music together with friends</p>
       </div>
 
-      <!-- Home: two main buttons -->
       <div v-if="step === 'home'" class="flex flex-col gap-3 w-full">
         <button
           class="btn-primary slide-up"
@@ -131,7 +127,6 @@ function submitUsername() {
         </button>
       </div>
 
-      <!-- Spotify password form -->
       <form v-else-if="step === 'spotify'" class="flex flex-col gap-3 w-full slide-up" @submit.prevent="submitSpotify">
         <p class="room-code-label">Enter your demo Spotify password</p>
         <input
@@ -147,7 +142,6 @@ function submitUsername() {
         </button>
       </form>
 
-      <!-- Join: room code form -->
       <form v-else-if="step === 'join'" class="flex flex-col gap-3 w-full slide-up" @submit.prevent="submitJoinCode">
         <p class="room-code-label">Enter the room code</p>
         <input
@@ -161,7 +155,6 @@ function submitUsername() {
         <button type="submit" class="btn-primary">Next</button>
       </form>
 
-      <!-- Username form (post-create / post-join) -->
       <form v-else class="flex flex-col gap-3 w-full slide-up" @submit.prevent="submitUsername">
         <p class="room-code-label">Room code: <span class="accent">{{ roomCode }}</span></p>
         <input
@@ -181,7 +174,6 @@ function submitUsername() {
 </template>
 
 <style scoped>
-/* ── Page ─────────────────────────────────────────── */
 .page {
   min-height: 100vh;
   display: flex;
@@ -194,7 +186,6 @@ function submitUsername() {
   overflow: hidden;
 }
 
-/* ── Glow orb ─────────────────────────────────────── */
 .glow {
   position: absolute;
   width: 600px;
@@ -209,7 +200,6 @@ function submitUsername() {
   pointer-events: none;
 }
 
-/* ── Card ─────────────────────────────────────────── */
 .card {
   position: relative;
   z-index: 10;
@@ -229,7 +219,6 @@ function submitUsername() {
     0 0 0 1px rgba(0, 0, 0, 0.4);
 }
 
-/* ── Logo ─────────────────────────────────────────── */
 .accent { color: #1DB954; }
 
 .eq-icon {

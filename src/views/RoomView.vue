@@ -108,8 +108,19 @@ function loadSpotifySDK(): Promise<void> {
   })
 }
 
-// Create the player object synchronously — no user gesture needed for this.
-// activateElement() is called separately from a user gesture (resumePlayback).
+function reloadSpotifySDK(): Promise<void> {
+  return new Promise((resolve) => {
+    const existing = document.querySelector('script[src*="spotify-player"]')
+    if (existing) existing.remove()
+    ;(window as unknown as { Spotify: unknown }).Spotify = undefined
+    window.onSpotifyWebPlaybackSDKReady = resolve
+    const script = document.createElement('script')
+    script.src = 'https://sdk.scdn.co/spotify-player.js'
+    script.async = true
+    document.head.appendChild(script)
+  })
+}
+
 function createPlayer() {
   if (spotifyPlayer || !window.Spotify) return
   spotifyPlayer = new window.Spotify.Player({
@@ -135,9 +146,6 @@ async function playSong(song: Song, positionMs = 0) {
   createPlayer()
 
   if (!playerActivated) {
-    // Safari (and other browsers) block audio without a user gesture.
-    // activateElement() must be called synchronously from a click handler.
-    // Show the resume overlay so the user provides that gesture.
     resumeSong = song
     resumeStartTime = new Date(Date.now() - positionMs).toISOString()
     resumeVisible.value = true
@@ -193,6 +201,13 @@ async function playSong(song: Song, positionMs = 0) {
   if (!res.ok) {
     const body = await res.text()
     console.error('Spotify play API error:', res.status, body)
+    if (res.status === 404) {
+      spotifyPlayer?.disconnect()
+      spotifyPlayer = null
+      deviceId = ''
+      playerActivated = false
+      playSong(song, positionMs)
+    }
     return
   }
 
@@ -203,6 +218,10 @@ async function playSong(song: Song, positionMs = 0) {
 
 function selectNewHost(id: string) {
   sendEvent('selected-new-host', { id })
+  spotifyPlayer?.disconnect()
+  spotifyPlayer = null
+  deviceId = ''
+  playerActivated = false
 }
 
 function voteSkip() {
@@ -213,8 +232,6 @@ function voteSkip() {
 function resumePlayback() {
   if (!resumeSong) return
 
-  // activateElement() MUST be called synchronously here, before any await,
-  // so Safari recognises it as part of the user gesture (button click).
   createPlayer()
   if (spotifyPlayer && !playerActivated) {
     spotifyPlayer.activateElement()
@@ -253,7 +270,6 @@ function handleEvent(raw: string) {
     currentToken = payload.token
     currentSong.value = payload.current_song
     if (payload.client_id === payload.host) {
-      // Pre-load SDK so window.Spotify exists when the user clicks Resume
       loadSpotifySDK().then(createPlayer)
     }
     if (payload.current_song) {
@@ -347,8 +363,11 @@ function handleEvent(raw: string) {
     hostId.value = payload.host
     currentToken = payload.token
     showToast(payload.message)
-    // Pre-load SDK for the new host
-    loadSpotifySDK().then(createPlayer)
+    spotifyPlayer?.disconnect()
+    spotifyPlayer = null
+    deviceId = ''
+    playerActivated = false
+    reloadSpotifySDK().then(createPlayer)
     if (currentSong.value) {
       resumeSong = currentSong.value
       resumeStartTime = payload.current_song_start_time
@@ -376,10 +395,19 @@ function handleEvent(raw: string) {
 
 let ws: WebSocket | null = null
 
-onMounted(() => {
+onMounted(async () => {
   if (!name) {
     router.replace({ path: '/', state: { roomCode } })
     return
+  }
+
+  const check = await fetch(`${API_BASE}/join/room/${roomCode}/${encodeURIComponent(name)}`)
+  if (!check.ok) {
+    const data = await check.json().catch(() => ({})) as { message?: string }
+    if (data?.message === 'Room code is incorrect.') {
+      router.replace({ path: '/', state: { error: data.message } })
+      return
+    }
   }
 
   ws = new WebSocket(`${WS_BASE}/join/room/${roomCode}/${encodeURIComponent(name)}`)
@@ -403,7 +431,6 @@ onUnmounted(() => {
 
     <RoomToast :message="toastMessage" :visible="toastVisible" />
 
-    <!-- GitHub link -->
     <a
       href="https://github.com/MarcusMJV/houseparty_backend"
       target="_blank"
@@ -425,7 +452,6 @@ onUnmounted(() => {
       </svg>
     </a>
 
-    <!-- Main card -->
     <div class="card slide-up">
       <div class="flex flex-col items-center gap-2">
         <div class="flex items-center gap-3">
@@ -459,12 +485,10 @@ onUnmounted(() => {
 
     <ResumeOverlay :visible="resumeVisible" @resume="resumePlayback" />
 
-    <!-- Backdrop (shared between search and users panels) -->
     <transition name="backdrop">
       <div v-if="searchOpen || usersOpen" class="backdrop" @click="searchOpen = false; usersOpen = false" />
     </transition>
 
-    <!-- Users panel -->
     <transition name="search-card">
       <UsersPanel
         v-if="usersOpen"
@@ -475,7 +499,6 @@ onUnmounted(() => {
       />
     </transition>
 
-    <!-- Search panel -->
     <transition name="search-card">
       <SearchPanel
         v-if="searchOpen"
@@ -573,7 +596,6 @@ onUnmounted(() => {
 }
 .github-link:hover { color: #fff; }
 
-/* Backdrop */
 .backdrop {
   position: fixed;
   inset: 0;
@@ -586,7 +608,6 @@ onUnmounted(() => {
 .backdrop-enter-from,
 .backdrop-leave-to { opacity: 0; }
 
-/* Search card slide-up transition (used for both UsersPanel and SearchPanel) */
 .search-card-enter-active { transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s ease; }
 .search-card-leave-active { transition: transform 0.25s ease, opacity 0.2s ease; }
 .search-card-enter-from,
