@@ -72,12 +72,26 @@ function submitUsername() {
     </transition>
 
     <a
+      href="https://marcusmjv.github.io/portfolio/"
+      target="_blank"
+      rel="noopener noreferrer"
+      class="github-link fixed top-5 right-14"
+      aria-label="Portfolio"
+    >
+      <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="8" r="4"/>
+        <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+      </svg>
+    </a>
+
+    <a
       href="https://github.com/MarcusMJV/houseparty_backend"
       target="_blank"
       rel="noopener noreferrer"
       class="github-link fixed top-5 right-5"
       aria-label="GitHub repository"
     >
+
       <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <path d="M12 0C5.373 0 0 5.373 0 12c0 5.303 3.438 9.8 8.205 11.387.6.113.82-.258.82-.577
                  0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756

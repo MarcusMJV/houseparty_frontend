@@ -432,6 +432,19 @@ onUnmounted(() => {
     <RoomToast :message="toastMessage" :visible="toastVisible" />
 
     <a
+      href="https://marcusmjv.github.io/portfolio/"
+      target="_blank"
+      rel="noopener noreferrer"
+      class="github-link fixed top-5 right-14"
+      aria-label="Portfolio"
+    >
+      <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="8" r="4"/>
+        <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+      </svg>
+    </a>
+
+    <a
       href="https://github.com/MarcusMJV/houseparty_backend"
       target="_blank"
       rel="noopener noreferrer"
