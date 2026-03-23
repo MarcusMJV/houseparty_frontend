@@ -128,10 +128,22 @@ function createPlayer() {
     getOAuthToken: (cb) => cb(currentToken),
     volume: 0.8,
   })
-  spotifyPlayer.addListener('initialization_error', (data) => console.error('Spotify init error:', data))
-  spotifyPlayer.addListener('authentication_error', (data) => console.error('Spotify auth error:', data))
-  spotifyPlayer.addListener('account_error', (data) => console.error('Spotify account error:', data))
-  spotifyPlayer.addListener('playback_error', (data) => console.error('Spotify playback error:', data))
+  spotifyPlayer.addListener('initialization_error', (data) => {
+    console.error('Spotify init error:', data)
+    window.location.reload()
+  })
+  spotifyPlayer.addListener('authentication_error', (data) => {
+    console.error('Spotify auth error:', data)
+    window.location.reload()
+  })
+  spotifyPlayer.addListener('account_error', (data) => {
+    console.error('Spotify account error:', data)
+    window.location.reload()
+  })
+  spotifyPlayer.addListener('playback_error', (data) => {
+    console.error('Spotify playback error:', data)
+    window.location.reload()
+  })
   spotifyPlayer.addListener('ready', (data) => {
     deviceId = data.device_id as string
     console.log('Spotify player ready, device_id:', deviceId)

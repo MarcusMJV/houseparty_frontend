@@ -66,41 +66,33 @@ const router = useRouter()
       <!-- Two-column body -->
       <div class="body-grid">
 
-        <!-- LEFT: text -->
+        <!-- LEFT: disclaimer + engineering notes -->
         <div class="left-col">
-          <section class="content-section">
-            <h2 class="section-title">About the Project</h2>
-            <div class="prose">
+          <!-- Disclaimer -->
+          <section class="disclaimer-card">
+            <div class="disclaimer-header">
+              <svg class="disclaimer-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
+              </svg>
+              <h2 class="disclaimer-title">Demo Disclaimer</h2>
+            </div>
+            <div class="disclaimer-prose">
               <p>
-                HouseParty is a real-time shared music queue application that allows multiple users to join a room and collaboratively control playback.
-                It's designed for social environments where one device acts as the host (connected to a speaker), while others can join the room and queue songs in real time.
+                This is a proof of concept. It uses a single shared Spotify developer account for playback and is not intended for production use.
               </p>
               <p>
-                The system focuses on low-latency synchronization using WebSockets, ensuring that all users see the same queue and state updates instantly.
-                Rooms are lightweight. Once all users leave, the session is automatically cleaned up.
+                To ensure a consistent demo experience, access is password-protected and limited to one active session at a time. If multiple users attempt to use playback simultaneously, Spotify restrictions may prevent it from functioning as expected.
               </p>
               <p>
-                The goal of this project was to build a simple, fast, and intuitive shared music experience without unnecessary complexity like accounts or persistent storage.
+                The demo password is included on the <a href="https://github.com/MarcusMJV/houseparty_backend" target="_blank" rel="noopener noreferrer" class="disclaimer-link">backend repo</a>. If you don't have access or if the demo password is no longer valid, feel free to contact me. I'm happy to provide it or spin up a dedicated instance for you to explore.
               </p>
+              <p>
+                In a production environment, this would be resolved through per-user authentication and proper token management.
+              </p>
+
             </div>
           </section>
 
-          <div class="divider"></div>
-
-          <section class="content-section">
-            <h2 class="section-title">Engineering Notes</h2>
-            <div class="engineering-card">
-              <p>
-                AI tools were used selectively in the frontend to accelerate UI development, assist with deployment, and improve iteration speed.
-              </p>
-              <p>
-                All backend systems including real-time communication, state synchronization, and overall architecture were fully engineered and implemented by me using Go and WebSockets. The focus of this project was on building a reliable, low-latency shared state system rather than over-engineering infrastructure.
-              </p>
-              <p>
-                Contributions to the frontend, including AI-assisted changes, are fully visible in the GitHub repository history.
-              </p>
-            </div>
-          </section>
         </div>
 
         <!-- RIGHT: video + button -->
@@ -116,30 +108,6 @@ const router = useRouter()
           <button class="btn-primary" @click="router.push('/')">
             Try the Live Demo →
           </button>
-
-          <!-- Disclaimer -->
-          <section class="disclaimer-card">
-            <div class="disclaimer-header">
-              <svg class="disclaimer-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
-              </svg>
-              <h2 class="disclaimer-title">Demo Disclaimer</h2>
-            </div>
-            <div class="disclaimer-prose">
-              <p>
-                This project is a proof of concept and uses a single shared Spotify developer account for playback.
-              </p>
-              <p>
-                To ensure a consistent demo experience, access is password-protected and limited to one active session at a time. If multiple users attempt to use playback simultaneously, Spotify restrictions may prevent it from functioning as expected.
-              </p>
-              <p>
-                The demo password is included on my resume. If you don't have access or if the demo password is no longer valid, feel free to contact me. I'm happy to provide it or spin up a dedicated instance for you to explore.
-              </p>
-              <p>
-                In a production environment, this would be resolved through per-user authentication and proper token management.
-              </p>
-            </div>
-          </section>
         </div>
 
       </div>
@@ -351,8 +319,8 @@ const router = useRouter()
   gap: 1rem;
   padding: 1.25rem 1.5rem;
   border-radius: 1rem;
-  background: rgba(234, 179, 8, 0.05);
-  border: 1px solid rgba(234, 179, 8, 0.25);
+  background: rgba(29, 185, 84, 0.05);
+  border: 1px solid rgba(29, 185, 84, 0.25);
 }
 
 .disclaimer-header {
@@ -364,7 +332,7 @@ const router = useRouter()
 .disclaimer-icon {
   width: 1.1rem;
   height: 1.1rem;
-  color: #facc15;
+  color: #1DB954;
   flex-shrink: 0;
 }
 
@@ -373,7 +341,7 @@ const router = useRouter()
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #facc15;
+  color: #1DB954;
 }
 
 .disclaimer-prose {
@@ -385,8 +353,16 @@ const router = useRouter()
 .disclaimer-prose p {
   font-size: 0.9rem;
   line-height: 1.75;
-  color: #fde68a;
+  color: #9ca3af;
 }
+
+.disclaimer-link {
+  color: #1DB954;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: opacity 0.15s ease;
+}
+.disclaimer-link:hover { opacity: 0.75; }
 
 /* Slide-up */
 @keyframes slide-up {
